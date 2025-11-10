@@ -1,0 +1,20 @@
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "e4f69c887422232e1277d81a92b798f1"
+name = "BOA-TASK-HOME-AE"
+application_url = "https://example.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = true
+include_config_on_deploy = true
+
+[webhooks]
+api_version = "2026-01"
+
+[access_scopes]
+scopes = "write_products,read_inventory,write_inventory"
+
+
+[auth]
+redirect_urls = [ "https://example.com/api/auth" ]
