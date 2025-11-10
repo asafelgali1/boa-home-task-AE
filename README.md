@@ -20,3 +20,12 @@ then updates the corresponding Shopify variants’ inventory levels via the **Sh
     { "sku": "12345", "quantity": 10 }
   ]
 }
+
+
+
+{
+  "results": [
+    { "sku": "20760", "success": true },
+    { "sku": "12345", "success": false, "error": "Variant not found" }
+  ]
+}
