@@ -20,6 +20,49 @@ const STATIC_PATH =
 
 const app = express();
 
+// -------------------- GRAPHQL QUERIES --------------------
+
+// חיפוש variant לפי SKU
+const VARIANT_BY_SKU_QUERY = `#graphql
+  query VariantBySku($query: String!) {
+    productVariants(first: 1, query: $query) {
+      nodes {
+        id
+        sku
+        inventoryItem {
+          id
+          inventoryLevels(first: 5) {
+            edges {
+              node {
+                id
+                location {
+                  id
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+`;
+
+// עדכון מלאי אבסולוטי
+const INVENTORY_SET_QUANTITIES_MUTATION = `#graphql
+  mutation InventorySetQuantities($input: InventorySetQuantitiesInput!) {
+    inventorySetQuantities(input: $input) {
+      inventoryAdjustmentGroup {
+        createdAt
+        reason
+      }
+      userErrors {
+        field
+        message
+      }
+    }
+  }
+`;
+
 // -------------------- SHOPIFY SETUP --------------------
 
 app.get(shopify.config.auth.path, shopify.auth.begin());
@@ -70,6 +113,103 @@ app.post("/api/products", async (_req, res) => {
     error = errorMessage;
   }
   res.status(status).send({ success: status === 200, error });
+});
+
+// -------------------- NEW ENDPOINT: INVENTORY SYNC --------------------
+
+app.post("/api/inventory-sync", async (req, res) => {
+  try {
+    const session = res.locals.shopify.session;
+    const client = new shopify.api.clients.Graphql({ session });
+
+    const body = req.body;
+
+    if (!body?.items || !Array.isArray(body.items)) {
+      return res.status(400).json({ error: "Field 'items' must be an array" });
+    }
+
+    const results = [];
+
+    for (const rawItem of body.items) {
+      const sku = rawItem?.sku;
+      const quantity = rawItem?.quantity;
+
+      if (sku == null || quantity == null) {
+        results.push({
+          sku,
+          success: false,
+          error: "Missing 'sku' or 'quantity'",
+        });
+        continue;
+      }
+
+      try {
+        // 1️ חיפוש ה-variant לפי SKU
+        const variantResp = await client.request(VARIANT_BY_SKU_QUERY, {
+          variables: { query: `sku:${sku}` },
+        });
+
+        const variants = variantResp?.data?.productVariants?.nodes || [];
+        if (variants.length === 0) {
+          throw new Error(`No variant found for sku ${sku}`);
+        }
+
+        const variant = variants[0];
+        const inventoryItem = variant.inventoryItem;
+        const levels = inventoryItem.inventoryLevels?.edges || [];
+        if (levels.length === 0) {
+          throw new Error(`No inventory levels for sku ${sku}`);
+        }
+
+        const inventoryItemId = inventoryItem.id;
+        const locationId = levels[0].node.location.id;
+
+        // 2️ עדכון כמות אבסולטית
+        const updateResp = await client.request(
+          INVENTORY_SET_QUANTITIES_MUTATION,
+          {
+            variables: {
+              input: {
+                name: "available",
+                reason: "correction",
+                ignoreCompareQuantity: true,
+                quantities: [
+                  {
+                    inventoryItemId,
+                    locationId,
+                    quantity: Number(quantity),
+                  },
+                ],
+              },
+            },
+          }
+        );
+
+        const userErrors =
+          updateResp?.data?.inventorySetQuantities?.userErrors || [];
+
+        if (userErrors.length > 0) {
+          throw new Error(
+            userErrors.map((/** @type {any} */ e) => e.message).join(", ")
+          );
+        }
+
+        results.push({ sku, success: true });
+      } catch (/** @type {any} */ err) {
+        console.error("Failed to update inventory for sku", sku, err);
+        results.push({
+          sku,
+          success: false,
+          error: err instanceof Error ? err.message : "Unknown error",
+        });
+      }
+    }
+
+    return res.status(200).json({ results });
+  } catch (/** @type {any} */ e) {
+    console.error("Error in /api/inventory-sync:", e);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 });
 
 // -------------------- STATIC + SERVER --------------------
